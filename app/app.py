@@ -4,7 +4,6 @@ import pandas as pd
 import streamlit as st
 from joblib import load
 
-
 # ---------------------------------------------------------
 # CONFIGURACIÓN
 # ---------------------------------------------------------
@@ -14,11 +13,7 @@ st.set_page_config(
     layout="wide",
 )
 
-MODEL_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "models"
-    / "ridge_optimized_pipeline.joblib"
-)
+MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "ridge_optimized_pipeline.joblib"
 
 model = load(MODEL_PATH)
 
