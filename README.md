@@ -169,3 +169,27 @@ This project was generated from [@JoseRZapata]'s [data science project template]
 [Pytest]: https://docs.pytest.org/en/latest/
 [Ruff]: https://docs.astral.sh/ruff/
 [UV]: https://docs.astral.sh/uv/
+
+## Demo local del modelo
+
+Se desarrolló una prueba de concepto (POC) local con Streamlit para comprobar que el modelo entrenado puede recibir los datos de un aspirante y generar una predicción de su probabilidad de admisión.
+
+### Instrucciones de ejecución
+
+Instalar las dependencias del proyecto:
+
+```bash
+uv sync
+```
+
+Ejecutar la aplicación:
+
+```bash
+uv run streamlit run app/app.py
+```
+
+Luego, abrir en el navegador:
+
+`http://localhost:8501`
+
+La aplicación utiliza el modelo entrenado `ridge_optimized_pipeline.joblib` para generar la probabilidad estimada de admisión.
