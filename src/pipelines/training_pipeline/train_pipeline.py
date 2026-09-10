@@ -8,6 +8,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from loguru import logger
+from scipy.stats import ks_2samp
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
@@ -43,6 +44,15 @@ TARGET_COLUMN = "Chance of Admit"
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 RIDGE_ALPHA = 10.0
+
+# Train/Test validation thresholds
+MIN_TEST_TRAIN_RATIO = 0.01
+DRIFT_P_VALUE_THRESHOLD = 0.05
+MAX_CATEGORY_PROPORTION_DIFFERENCE = 0.20
+
+
+class TrainTestValidationError(ValueError):
+    """Raised when a critical train/test validation check fails."""
 
 
 def load_features(filepath: Path = FEATURE_DATA_PATH) -> pd.DataFrame:
@@ -87,6 +97,210 @@ def split_train_test(
     logger.debug(f"Test features shape: {x_test.shape}")
 
     return x_train, x_test, y_train, y_test
+
+
+def _validate_dataset_sizes(
+    x_train: pd.DataFrame,
+    x_test: pd.DataFrame,
+) -> dict[str, float | bool]:
+    """Validate the relative size of train and test datasets."""
+    if x_train.empty or x_test.empty:
+        message = "Train and test datasets must not be empty."
+        raise TrainTestValidationError(message)
+
+    test_train_ratio = len(x_test) / len(x_train)
+    passed = test_train_ratio > MIN_TEST_TRAIN_RATIO
+
+    if not passed:
+        message = (
+            f"Test dataset is too small compared with train dataset. Ratio: {test_train_ratio:.4f}"
+        )
+        raise TrainTestValidationError(message)
+
+    return {
+        "passed": True,
+        "test_train_ratio": float(test_train_ratio),
+    }
+
+
+def _validate_index_leakage(
+    x_train: pd.DataFrame,
+    x_test: pd.DataFrame,
+) -> dict[str, int | bool]:
+    """Check whether train and test share dataframe indices."""
+    leaking_indices = x_train.index.intersection(x_test.index)
+
+    if len(leaking_indices) > 0:
+        message = f"Train-test index leakage detected. Shared indices: {len(leaking_indices)}"
+        raise TrainTestValidationError(message)
+
+    return {
+        "passed": True,
+        "shared_indices": 0,
+    }
+
+
+def _validate_sample_mix(
+    x_train: pd.DataFrame,
+    x_test: pd.DataFrame,
+) -> dict[str, int | bool]:
+    """Check whether identical feature rows appear in train and test."""
+    train_rows = {
+        tuple(row) for row in x_train.astype(object).where(pd.notna(x_train), None).to_numpy()
+    }
+    test_rows = {
+        tuple(row) for row in x_test.astype(object).where(pd.notna(x_test), None).to_numpy()
+    }
+
+    mixed_samples = train_rows.intersection(test_rows)
+
+    if mixed_samples:
+        message = f"Train-test sample mixing detected. Shared feature rows: {len(mixed_samples)}"
+        raise TrainTestValidationError(message)
+
+    return {
+        "passed": True,
+        "shared_samples": 0,
+    }
+
+
+def _check_numeric_drift(
+    x_train: pd.DataFrame,
+    x_test: pd.DataFrame,
+) -> dict[str, dict[str, float | bool]]:
+    """Compare numeric feature distributions using Kolmogorov-Smirnov."""
+    results = {}
+
+    for column in NUMERIC_COLUMNS:
+        train_values = x_train[column].dropna().astype(float)
+        test_values = x_test[column].dropna().astype(float)
+
+        statistic, p_value = ks_2samp(train_values, test_values)
+        passed = p_value >= DRIFT_P_VALUE_THRESHOLD
+
+        results[column] = {
+            "passed": bool(passed),
+            "ks_statistic": float(statistic),
+            "p_value": float(p_value),
+        }
+
+        if not passed:
+            logger.warning(
+                f"Possible distribution drift detected in '{column}': "
+                f"KS={statistic:.4f}, p-value={p_value:.4f}"
+            )
+
+    return results
+
+
+def _check_categorical_drift(
+    x_train: pd.DataFrame,
+    x_test: pd.DataFrame,
+) -> dict[str, dict[str, float | bool]]:
+    """Compare category proportions between train and test."""
+    results = {}
+
+    for column in CATEGORICAL_COLUMNS:
+        train_proportions = x_train[column].value_counts(
+            normalize=True,
+            dropna=False,
+        )
+        test_proportions = x_test[column].value_counts(
+            normalize=True,
+            dropna=False,
+        )
+
+        categories = train_proportions.index.union(test_proportions.index)
+
+        max_difference = max(
+            abs(
+                float(train_proportions.get(category, 0.0))
+                - float(test_proportions.get(category, 0.0))
+            )
+            for category in categories
+        )
+
+        passed = max_difference <= MAX_CATEGORY_PROPORTION_DIFFERENCE
+
+        results[column] = {
+            "passed": bool(passed),
+            "max_proportion_difference": float(max_difference),
+        }
+
+        if not passed:
+            logger.warning(
+                f"Possible categorical drift detected in '{column}': "
+                f"maximum proportion difference={max_difference:.4f}"
+            )
+
+    return results
+
+
+def _check_target_drift(
+    y_train: pd.Series,
+    y_test: pd.Series,
+) -> dict[str, float | bool]:
+    """Compare target distributions using Kolmogorov-Smirnov."""
+    train_values = y_train.dropna().astype(float)
+    test_values = y_test.dropna().astype(float)
+
+    statistic, p_value = ks_2samp(train_values, test_values)
+    passed = p_value >= DRIFT_P_VALUE_THRESHOLD
+
+    if not passed:
+        logger.warning(f"Possible target drift detected: KS={statistic:.4f}, p-value={p_value:.4f}")
+
+    return {
+        "passed": bool(passed),
+        "ks_statistic": float(statistic),
+        "p_value": float(p_value),
+    }
+
+
+def validate_train_test_split(
+    x_train: pd.DataFrame,
+    x_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series,
+) -> dict[str, object]:
+    """Validate train/test separation for leakage and distribution changes."""
+    logger.info("Validate train/test split")
+
+    size_result = _validate_dataset_sizes(x_train, x_test)
+    index_result = _validate_index_leakage(x_train, x_test)
+    sample_mix_result = _validate_sample_mix(x_train, x_test)
+
+    numeric_drift = _check_numeric_drift(x_train, x_test)
+    categorical_drift = _check_categorical_drift(x_train, x_test)
+    target_drift = _check_target_drift(y_train, y_test)
+
+    distribution_checks_passed = (
+        all(result["passed"] for result in numeric_drift.values())
+        and all(result["passed"] for result in categorical_drift.values())
+        and bool(target_drift["passed"])
+    )
+
+    validation_results = {
+        "dataset_size": size_result,
+        "index_leakage": index_result,
+        "sample_mix": sample_mix_result,
+        "numeric_feature_drift": numeric_drift,
+        "categorical_feature_drift": categorical_drift,
+        "target_drift": target_drift,
+        "distribution_checks_passed": distribution_checks_passed,
+    }
+
+    if distribution_checks_passed:
+        logger.info("Train/test distribution checks passed")
+    else:
+        logger.warning(
+            "Train/test validation detected distribution differences. "
+            "Review the reported drift checks."
+        )
+
+    logger.info("Critical train/test leakage checks passed")
+
+    return validation_results
 
 
 def build_preprocessor() -> ColumnTransformer:
@@ -222,13 +436,21 @@ def run_training_pipeline() -> None:
     logger.info("Start Admissions Training Pipeline")
 
     data = load_features()
-
     x_features, y_target = split_features_target(data)
 
     x_train, x_test, y_train, y_test = split_train_test(
         x_features,
         y_target,
     )
+
+    validation_results = validate_train_test_split(
+        x_train,
+        x_test,
+        y_train,
+        y_test,
+    )
+
+    logger.info(f"Train/test validation results: {validation_results}")
 
     model = build_model()
     trained_model = train_model(model, x_train, y_train)
