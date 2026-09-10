@@ -78,10 +78,13 @@ def test_split_train_test() -> None:
         y_target,
     )
 
-    assert len(x_train) == 8
-    assert len(x_test) == 2
-    assert len(y_train) == 8
-    assert len(y_test) == 2
+    expected_train_size = 8
+    expected_test_size = 2
+
+    assert len(x_train) == expected_train_size
+    assert len(x_test) == expected_test_size
+    assert len(y_train) == expected_train_size
+    assert len(y_test) == expected_test_size
 
 
 def test_train_model() -> None:

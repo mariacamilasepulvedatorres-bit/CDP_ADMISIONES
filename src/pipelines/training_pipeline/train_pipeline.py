@@ -1,7 +1,6 @@
 """Training pipeline for the Admissions Prediction project."""
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -23,13 +22,9 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 # Project paths
-FEATURE_DATA_PATH = (
-    _PROJECT_ROOT / "data" / "04_feature" / "admission_features.parquet"
-)
+FEATURE_DATA_PATH = _PROJECT_ROOT / "data" / "04_feature" / "admission_features.parquet"
 MODEL_PATH = _PROJECT_ROOT / "models" / "ridge_optimized_pipeline.joblib"
-METRICS_PATH = (
-    _PROJECT_ROOT / "data" / "07_model_output" / "training_metrics.json"
-)
+METRICS_PATH = _PROJECT_ROOT / "data" / "07_model_output" / "training_metrics.json"
 
 # Model variables defined during the POC
 NUMERIC_COLUMNS = [
