@@ -249,4 +249,3 @@ def test_save_metrics(tmp_path: Path) -> None:
     assert '"MAE"' in content
     assert '"RMSE"' in content
     assert '"R2"' in content
-    
