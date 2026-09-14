@@ -7,14 +7,11 @@ import joblib
 import pandas as pd
 from loguru import logger
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 MODEL_PATH = PROJECT_ROOT / "models" / "ridge_optimized_pipeline.joblib"
 INPUT_PATH = PROJECT_ROOT / "data" / "08_inference_input" / "admission_new_data.csv"
-OUTPUT_PATH = (
-    PROJECT_ROOT / "data" / "09_inference_output" / "admission_predictions.csv"
-)
+OUTPUT_PATH = PROJECT_ROOT / "data" / "09_inference_output" / "admission_predictions.csv"
 
 FEATURE_COLUMNS = [
     "GRE Score",
@@ -71,10 +68,7 @@ def load_inference_data(input_path: Path = INPUT_PATH) -> pd.DataFrame:
     elif suffix == ".parquet":
         data = pd.read_parquet(input_path)
     else:
-        msg = (
-            "Unsupported inference file format. "
-            "Only CSV and Parquet files are supported."
-        )
+        msg = "Unsupported inference file format. Only CSV and Parquet files are supported."
         raise InferenceValidationError(msg)
 
     data.columns = data.columns.str.strip()
@@ -89,9 +83,7 @@ def validate_inference_data(data: pd.DataFrame) -> None:
     """Validate that inference data contains all required features."""
     logger.info("Validating inference data")
 
-    missing_columns = [
-        column for column in FEATURE_COLUMNS if column not in data.columns
-    ]
+    missing_columns = [column for column in FEATURE_COLUMNS if column not in data.columns]
 
     if missing_columns:
         msg = f"Missing required inference columns: {missing_columns}"
@@ -134,10 +126,7 @@ def generate_predictions(
     )
 
     logger.info(f"Generated {len(prediction_series)} predictions")
-    logger.debug(
-        "Prediction range: "
-        f"{prediction_series.min():.4f} - {prediction_series.max():.4f}"
-    )
+    logger.debug(f"Prediction range: {prediction_series.min():.4f} - {prediction_series.max():.4f}")
 
     return prediction_series
 

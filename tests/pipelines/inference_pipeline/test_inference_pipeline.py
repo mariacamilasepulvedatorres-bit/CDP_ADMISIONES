@@ -21,13 +21,15 @@ from src.pipelines.inference_pipeline.inference_pipeline import (
     validate_inference_data,
 )
 
+DUMMY_PREDICTION = 0.80
+
 
 class DummyAdmissionModel:
     """Dummy model used to test the inference pipeline."""
 
     def predict(self, features: pd.DataFrame) -> np.ndarray:
         """Return deterministic synthetic predictions."""
-        return np.full(len(features), 0.80)
+        return np.full(len(features), DUMMY_PREDICTION)
 
 
 def create_sample_inference_data() -> pd.DataFrame:
@@ -154,7 +156,7 @@ def test_generate_predictions() -> None:
 
     assert len(predictions) == len(data)
     assert predictions.name == PREDICTION_COLUMN
-    assert (predictions == 0.80).all()
+    assert (predictions == DUMMY_PREDICTION).all()
 
 
 def test_build_prediction_output() -> None:
@@ -172,7 +174,7 @@ def test_build_prediction_output() -> None:
 
     assert PREDICTION_COLUMN in output.columns
     assert len(output) == len(data)
-    assert (output[PREDICTION_COLUMN] == 0.80).all()
+    assert (output[PREDICTION_COLUMN] == DUMMY_PREDICTION).all()
 
 
 def test_save_predictions(tmp_path: Path) -> None:
@@ -216,4 +218,4 @@ def test_run_inference_pipeline(tmp_path: Path) -> None:
     assert output_path.exists()
     assert PREDICTION_COLUMN in result.columns
     assert len(result) == len(input_data)
-    assert (result[PREDICTION_COLUMN] == 0.80).all()
+    assert (result[PREDICTION_COLUMN] == DUMMY_PREDICTION).all()
