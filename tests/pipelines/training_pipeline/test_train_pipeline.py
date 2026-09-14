@@ -7,11 +7,16 @@ import pandas as pd
 import pytest
 
 from src.pipelines.training_pipeline.train_pipeline import (
+    CV_FOLDS,
     TARGET_COLUMN,
     TrainTestValidationError,
+    analyze_generalization,
     build_model,
     calculate_metrics,
+    cross_validate_model,
     load_features,
+    plot_cross_validation_folds,
+    plot_metric_comparison,
     save_metrics,
     save_model,
     split_features_target,
@@ -202,6 +207,160 @@ def test_calculate_metrics() -> None:
     assert all(isinstance(value, float) for value in metrics.values())
 
 
+def test_cross_validate_model() -> None:
+    """Test K-Fold cross-validation metrics."""
+    data = create_sample_data()
+    x_features, y_target = split_features_target(data)
+
+    model = build_model()
+
+    cv_metrics, fold_metrics = cross_validate_model(
+        model,
+        x_features,
+        y_target,
+    )
+
+    assert set(cv_metrics) == {"MAE", "RMSE", "R2"}
+    assert set(fold_metrics) == {"MAE", "RMSE", "R2"}
+
+    assert all(isinstance(value, float) for value in cv_metrics.values())
+
+    assert len(fold_metrics["MAE"]) == CV_FOLDS
+    assert len(fold_metrics["RMSE"]) == CV_FOLDS
+    assert len(fold_metrics["R2"]) == CV_FOLDS
+
+
+def test_analyze_generalization_adequate() -> None:
+    """Test detection of adequate model generalization."""
+    train_metrics = {
+        "MAE": 0.045,
+        "RMSE": 0.063,
+        "R2": 0.81,
+    }
+    cv_metrics = {
+        "MAE": 0.047,
+        "RMSE": 0.064,
+        "R2": 0.79,
+    }
+    test_metrics = {
+        "MAE": 0.052,
+        "RMSE": 0.070,
+        "R2": 0.78,
+    }
+
+    result = analyze_generalization(
+        train_metrics,
+        cv_metrics,
+        test_metrics,
+    )
+
+    assert result["diagnosis"] == "adequate_generalization"
+
+
+def test_analyze_generalization_detects_overfitting() -> None:
+    """Test detection of possible overfitting."""
+    train_metrics = {
+        "MAE": 0.01,
+        "RMSE": 0.02,
+        "R2": 0.95,
+    }
+    cv_metrics = {
+        "MAE": 0.08,
+        "RMSE": 0.10,
+        "R2": 0.70,
+    }
+    test_metrics = {
+        "MAE": 0.09,
+        "RMSE": 0.11,
+        "R2": 0.68,
+    }
+
+    result = analyze_generalization(
+        train_metrics,
+        cv_metrics,
+        test_metrics,
+    )
+
+    assert result["diagnosis"] == "possible_overfitting"
+
+
+def test_analyze_generalization_detects_underfitting() -> None:
+    """Test detection of possible underfitting."""
+    train_metrics = {
+        "MAE": 0.15,
+        "RMSE": 0.18,
+        "R2": 0.40,
+    }
+    cv_metrics = {
+        "MAE": 0.16,
+        "RMSE": 0.19,
+        "R2": 0.35,
+    }
+    test_metrics = {
+        "MAE": 0.17,
+        "RMSE": 0.20,
+        "R2": 0.32,
+    }
+
+    result = analyze_generalization(
+        train_metrics,
+        cv_metrics,
+        test_metrics,
+    )
+
+    assert result["diagnosis"] == "possible_underfitting"
+
+
+def test_plot_metric_comparison(tmp_path: Path) -> None:
+    """Test generation of model validation comparison plot."""
+    output_file = tmp_path / "model_validation_metrics.png"
+
+    train_metrics = {
+        "MAE": 0.045,
+        "RMSE": 0.063,
+        "R2": 0.81,
+    }
+    cv_metrics = {
+        "MAE": 0.047,
+        "RMSE": 0.064,
+        "R2": 0.79,
+    }
+    test_metrics = {
+        "MAE": 0.052,
+        "RMSE": 0.070,
+        "R2": 0.78,
+    }
+
+    plot_metric_comparison(
+        train_metrics,
+        cv_metrics,
+        test_metrics,
+        output_file,
+    )
+
+    assert output_file.exists()
+    assert output_file.stat().st_size > 0
+
+
+def test_plot_cross_validation_folds(tmp_path: Path) -> None:
+    """Test generation of K-Fold validation plot."""
+    output_file = tmp_path / "cross_validation_folds.png"
+
+    fold_metrics = {
+        "MAE": [0.04, 0.041, 0.05, 0.049, 0.053],
+        "RMSE": [0.055, 0.057, 0.071, 0.069, 0.071],
+        "R2": [0.81, 0.86, 0.80, 0.77, 0.71],
+    }
+
+    plot_cross_validation_folds(
+        fold_metrics,
+        output_file,
+    )
+
+    assert output_file.exists()
+    assert output_file.stat().st_size > 0
+
+
 def test_save_model(tmp_path: Path) -> None:
     """Test trained model persistence."""
     data = create_sample_data()
@@ -222,19 +381,27 @@ def test_save_model(tmp_path: Path) -> None:
 
 
 def test_save_metrics(tmp_path: Path) -> None:
-    """Test evaluation metrics persistence."""
+    """Test evaluation and validation metrics persistence."""
     output_file = tmp_path / "metrics.json"
 
     metrics = {
         "train": {
-            "MAE": 0.04,
-            "RMSE": 0.06,
-            "R2": 0.80,
+            "MAE": 0.045,
+            "RMSE": 0.063,
+            "R2": 0.81,
+        },
+        "cross_validation": {
+            "MAE": 0.047,
+            "RMSE": 0.064,
+            "R2": 0.79,
         },
         "test": {
-            "MAE": 0.05,
-            "RMSE": 0.07,
+            "MAE": 0.052,
+            "RMSE": 0.070,
             "R2": 0.78,
+        },
+        "generalization_analysis": {
+            "diagnosis": "adequate_generalization",
         },
     }
 
@@ -245,7 +412,9 @@ def test_save_metrics(tmp_path: Path) -> None:
     content = output_file.read_text(encoding="utf-8")
 
     assert '"train"' in content
+    assert '"cross_validation"' in content
     assert '"test"' in content
+    assert '"generalization_analysis"' in content
     assert '"MAE"' in content
     assert '"RMSE"' in content
     assert '"R2"' in content
