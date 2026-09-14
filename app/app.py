@@ -1,4 +1,7 @@
+"""Aplicación Streamlit para predicción online de admisiones."""
+
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -13,9 +16,28 @@ st.set_page_config(
     layout="wide",
 )
 
-MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "ridge_optimized_pipeline.joblib"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MODEL_PATH = PROJECT_ROOT / "models" / "ridge_optimized_pipeline.joblib"
 
-model = load(MODEL_PATH)
+
+@st.cache_resource
+def load_model() -> Any:
+    """Carga y almacena en caché el modelo entrenado."""
+    if not MODEL_PATH.exists():
+        msg = f"No se encontró el modelo en: {MODEL_PATH}"
+        raise FileNotFoundError(msg)
+
+    return load(MODEL_PATH)
+
+
+try:
+    model = load_model()
+except FileNotFoundError as error:
+    st.error(
+        "No fue posible cargar el modelo entrenado. Verifique que el archivo del modelo exista."
+    )
+    st.exception(error)
+    st.stop()
 
 
 # ---------------------------------------------------------
@@ -112,6 +134,13 @@ st.markdown(
         font-weight: 800;
     }
 
+    .instructions {
+        background: rgba(255, 255, 255, 0.65);
+        border-radius: 14px;
+        padding: 15px 20px;
+        margin-bottom: 25px;
+    }
+
     .footer-text {
         text-align: center;
         color: #9275bf;
@@ -133,10 +162,23 @@ st.markdown(
         <div class="hero-label">ANÁLISIS DE DATOS PARA LA EDUCACIÓN</div>
         <h1>🎓 Predicción de probabilidad de admisión</h1>
         <p>
-        Ingrese la información del aspirante para estimar su
-        probabilidad de admisión mediante el modelo de aprendizaje
+        Ingrese la información académica del aspirante para estimar
+        su probabilidad de admisión mediante el modelo de aprendizaje
         automático entrenado.
         </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="instructions">
+        <strong>¿Cómo utilizar la aplicación?</strong><br>
+        1. Ingrese la información académica del aspirante.<br>
+        2. Indique si cuenta con experiencia en investigación.<br>
+        3. Presione <strong>Realizar predicción</strong>.<br>
+        4. Consulte la probabilidad estimada de admisión.
     </div>
     """,
     unsafe_allow_html=True,
@@ -152,18 +194,20 @@ col1, col2 = st.columns(2, gap="large")
 
 with col1:
     gre_score = st.number_input(
-        "GRE Score",
-        min_value=0,
-        max_value=400,
+        "Puntuación GRE",
+        min_value=260,
+        max_value=340,
         value=320,
+        help="Puntuación del examen GRE entre 260 y 340.",
     )
 
     university_rating = st.number_input(
-        "University Rating",
+        "Clasificación universitaria",
         min_value=1.0,
         max_value=5.0,
         value=3.0,
         step=1.0,
+        help="Clasificación de la universidad entre 1 y 5.",
     )
 
     lor = st.number_input(
@@ -172,21 +216,22 @@ with col1:
         max_value=5.0,
         value=3.0,
         step=0.5,
+        help="Valoración de las cartas de recomendación entre 1 y 5.",
     )
 
     research = st.selectbox(
-        "Research",
+        "Experiencia en investigación",
         options=[False, True],
         format_func=lambda value: "Sí" if value else "No",
     )
 
-
 with col2:
     toefl_score = st.number_input(
-        "TOEFL Score",
+        "Puntuación TOEFL",
         min_value=0,
-        max_value=150,
+        max_value=120,
         value=110,
+        help="Puntuación del examen TOEFL entre 0 y 120.",
     )
 
     sop = st.number_input(
@@ -195,14 +240,16 @@ with col2:
         max_value=5.0,
         value=3.0,
         step=0.5,
+        help="Valoración de la declaración de propósito entre 1 y 5.",
     )
 
     cgpa = st.number_input(
-        "CGPA",
+        "Promedio general de calificaciones (CGPA)",
         min_value=0.0,
         max_value=10.0,
         value=8.5,
         step=0.1,
+        help="Promedio académico acumulado entre 0 y 10.",
     )
 
 
@@ -228,24 +275,35 @@ if st.button("✨ Realizar predicción", use_container_width=True):
 
     input_data["Research"] = input_data["Research"].astype("object")
 
-    prediction = model.predict(input_data)[0]
+    try:
+        prediction = float(model.predict(input_data)[0])
 
-    st.markdown(
-        f"""
-        <div class="result-card">
-            <div class="result-title">RESULTADO</div>
-            <div>Probabilidad estimada de admisión</div>
-            <div class="result-number">{prediction:.2%}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        # La variable objetivo del modelo representa una probabilidad.
+        prediction = max(0.0, min(1.0, prediction))
+
+        st.markdown(
+            f"""
+            <div class="result-card">
+                <div class="result-title">RESULTADO</div>
+                <div>Probabilidad estimada de admisión</div>
+                <div class="result-number">{prediction:.2%}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    except (TypeError, ValueError) as error:
+        st.error("No fue posible generar la predicción.")
+        st.exception(error)
 
 
+# ---------------------------------------------------------
+# PIE DE PÁGINA
+# ---------------------------------------------------------
 st.markdown(
     """
     <div class="footer-text">
-        La educación transforma vidas 💜
+        Modelo de predicción de admisiones · Ciencia de Datos en Producción 🎓
     </div>
     """,
     unsafe_allow_html=True,
