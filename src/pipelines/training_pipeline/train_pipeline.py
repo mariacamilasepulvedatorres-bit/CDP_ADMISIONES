@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -13,7 +14,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 
@@ -25,7 +26,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 # Project paths
 FEATURE_DATA_PATH = _PROJECT_ROOT / "data" / "04_feature" / "admission_features.parquet"
 MODEL_PATH = _PROJECT_ROOT / "models" / "ridge_optimized_pipeline.joblib"
-METRICS_PATH = _PROJECT_ROOT / "data" / "07_model_output" / "training_metrics.json"
+OUTPUT_PATH = _PROJECT_ROOT / "data" / "07_model_output"
+METRICS_PATH = OUTPUT_PATH / "training_metrics.json"
+METRICS_COMPARISON_PLOT_PATH = OUTPUT_PATH / "model_validation_metrics.png"
+CV_FOLDS_PLOT_PATH = OUTPUT_PATH / "cross_validation_folds.png"
 
 # Model variables defined during the POC
 NUMERIC_COLUMNS = [
@@ -49,6 +53,11 @@ RIDGE_ALPHA = 10.0
 MIN_TEST_TRAIN_RATIO = 0.01
 DRIFT_P_VALUE_THRESHOLD = 0.05
 MAX_CATEGORY_PROPORTION_DIFFERENCE = 0.20
+
+# Model validation configuration
+CV_FOLDS = 5
+OVERFITTING_R2_GAP = 0.10
+UNDERFITTING_R2_THRESHOLD = 0.50
 
 
 class TrainTestValidationError(ValueError):
@@ -403,6 +412,150 @@ def evaluate_model(
     }
 
 
+def cross_validate_model(
+    model: Pipeline,
+    x_train: pd.DataFrame,
+    y_train: pd.Series,
+) -> tuple[dict[str, float], dict[str, list[float]]]:
+    """Evaluate model generalization using K-Fold cross-validation."""
+    logger.info(f"Run {CV_FOLDS}-Fold cross-validation on training data")
+
+    kfold = KFold(
+        n_splits=CV_FOLDS,
+        shuffle=True,
+        random_state=RANDOM_STATE,
+    )
+
+    scoring = {
+        "MAE": "neg_mean_absolute_error",
+        "RMSE": "neg_root_mean_squared_error",
+        "R2": "r2",
+    }
+
+    cv_results = cross_validate(
+        model,
+        x_train,
+        y_train,
+        cv=kfold,
+        scoring=scoring,
+        return_train_score=False,
+    )
+
+    fold_metrics = {
+        "MAE": (-cv_results["test_MAE"]).tolist(),
+        "RMSE": (-cv_results["test_RMSE"]).tolist(),
+        "R2": cv_results["test_R2"].tolist(),
+    }
+
+    cv_metrics = {
+        "MAE": float(np.mean(fold_metrics["MAE"])),
+        "RMSE": float(np.mean(fold_metrics["RMSE"])),
+        "R2": float(np.mean(fold_metrics["R2"])),
+    }
+
+    logger.info(f"Cross-validation mean metrics: {cv_metrics}")
+    logger.info(f"Cross-validation fold metrics: {fold_metrics}")
+
+    return cv_metrics, fold_metrics
+
+
+def analyze_generalization(
+    train_metrics: dict[str, float],
+    cv_metrics: dict[str, float],
+    test_metrics: dict[str, float],
+) -> dict[str, str | float]:
+    """Analyze underfitting, overfitting, and model generalization."""
+    train_r2 = train_metrics["R2"]
+    cv_r2 = cv_metrics["R2"]
+    test_r2 = test_metrics["R2"]
+
+    train_cv_gap = train_r2 - cv_r2
+    train_test_gap = train_r2 - test_r2
+
+    if (
+        train_r2 < UNDERFITTING_R2_THRESHOLD
+        and cv_r2 < UNDERFITTING_R2_THRESHOLD
+        and test_r2 < UNDERFITTING_R2_THRESHOLD
+    ):
+        diagnosis = "possible_underfitting"
+        recommendation = "Review feature engineering, model complexity, and Ridge regularization."
+        logger.warning("Possible underfitting detected: train, CV and test R2 are low.")
+    elif train_cv_gap > OVERFITTING_R2_GAP or train_test_gap > OVERFITTING_R2_GAP:
+        diagnosis = "possible_overfitting"
+        recommendation = "Review regularization, feature selection, and model complexity."
+        logger.warning(
+            "Possible overfitting detected: training performance is "
+            "considerably higher than validation or test performance."
+        )
+    else:
+        diagnosis = "adequate_generalization"
+        recommendation = "Model performance is stable across train, cross-validation, and test."
+        logger.info("Model shows adequate generalization.")
+
+    return {
+        "diagnosis": diagnosis,
+        "recommendation": recommendation,
+        "train_cv_r2_gap": float(train_cv_gap),
+        "train_test_r2_gap": float(train_test_gap),
+    }
+
+
+def plot_metric_comparison(
+    train_metrics: dict[str, float],
+    cv_metrics: dict[str, float],
+    test_metrics: dict[str, float],
+    filepath: Path = METRICS_COMPARISON_PLOT_PATH,
+) -> None:
+    """Save comparison plots for train, cross-validation, and test metrics."""
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    labels = ["Train", "Cross-validation", "Test"]
+    metric_sets = [train_metrics, cv_metrics, test_metrics]
+
+    figure, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    for axis, metric in zip(axes, ["MAE", "RMSE", "R2"], strict=True):
+        values = [metrics[metric] for metrics in metric_sets]
+        axis.bar(labels, values)
+        axis.set_title(metric)
+        axis.set_ylabel("Score")
+        axis.grid(axis="y", alpha=0.3)
+
+    figure.suptitle("Model Validation: Train vs Cross-validation vs Test")
+    figure.tight_layout()
+    figure.savefig(filepath, dpi=150, bbox_inches="tight")
+    plt.close(figure)
+
+    logger.info(f"Model validation metrics plot saved to: {filepath}")
+
+
+def plot_cross_validation_folds(
+    fold_metrics: dict[str, list[float]],
+    filepath: Path = CV_FOLDS_PLOT_PATH,
+) -> None:
+    """Save cross-validation metric results for every fold."""
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    folds = np.arange(1, CV_FOLDS + 1)
+
+    figure, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    for axis, metric in zip(axes, ["MAE", "RMSE", "R2"], strict=True):
+        axis.plot(folds, fold_metrics[metric], marker="o")
+        axis.set_title(metric)
+        axis.set_xlabel("Fold")
+        axis.set_ylabel("Score")
+        axis.set_xticks(folds)
+        axis.grid(alpha=0.3)
+
+    figure.suptitle("K-Fold Cross-validation Results")
+    figure.tight_layout()
+    figure.savefig(filepath, dpi=150, bbox_inches="tight")
+    plt.close(figure)
+
+    logger.info(f"Cross-validation folds plot saved to: {filepath}")
+
+
 def save_model(
     model: Pipeline,
     filepath: Path = MODEL_PATH,
@@ -417,10 +570,10 @@ def save_model(
 
 
 def save_metrics(
-    metrics: dict[str, dict[str, float]],
+    metrics: dict[str, object],
     filepath: Path = METRICS_PATH,
 ) -> None:
-    """Persist model evaluation metrics as JSON."""
+    """Persist model evaluation and validation metrics as JSON."""
     logger.info(f"Saving evaluation metrics to: {filepath}")
 
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -449,19 +602,46 @@ def run_training_pipeline() -> None:
         y_train,
         y_test,
     )
-
     logger.info(f"Train/test validation results: {validation_results}")
 
     model = build_model()
+
+    cv_metrics, fold_metrics = cross_validate_model(
+        model,
+        x_train,
+        y_train,
+    )
+
     trained_model = train_model(model, x_train, y_train)
 
-    metrics = evaluate_model(
+    evaluation_metrics = evaluate_model(
         trained_model,
         x_train,
         x_test,
         y_train,
         y_test,
     )
+
+    generalization_analysis = analyze_generalization(
+        evaluation_metrics["train"],
+        cv_metrics,
+        evaluation_metrics["test"],
+    )
+
+    metrics = {
+        "train": evaluation_metrics["train"],
+        "cross_validation": cv_metrics,
+        "cross_validation_folds": fold_metrics,
+        "test": evaluation_metrics["test"],
+        "generalization_analysis": generalization_analysis,
+    }
+
+    plot_metric_comparison(
+        evaluation_metrics["train"],
+        cv_metrics,
+        evaluation_metrics["test"],
+    )
+    plot_cross_validation_folds(fold_metrics)
 
     save_model(trained_model)
     save_metrics(metrics)
